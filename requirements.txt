@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+langgraph
+google-genai
+psycopg[binary,pool]
+langgraph-checkpoint-postgres
+python-dotenv
