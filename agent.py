@@ -34,8 +34,8 @@ tool_node = ToolNode(tools)
 
 # Initialize the Gemini model via Google GenAI SDK
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-# Default to gemini-1.5-pro for subscriber accounts, can be overridden in .env
-MODEL_ID = os.getenv("MODEL_ID", "gemini-1.5-pro") 
+# Default to gemini-3.1-pro-preview for subscriber accounts, can be overridden in .env
+MODEL_ID = os.getenv("MODEL_ID", "gemini-3.1-pro-preview") 
 
 def call_model(state: State):
     messages = state["messages"]
