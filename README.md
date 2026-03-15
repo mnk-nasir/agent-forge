@@ -42,6 +42,20 @@ graph TD
    docker-compose up -d --build
    ```
 
+### Local Development (No Docker)
+
+If you don't have Docker installed, you can run the agent locally using SQLite for persistence:
+
+1. **Install Dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. **Run the local script**:
+   ```bash
+   python run_local.py
+   ```
+   *Note: This will create a `checkpoints.sqlite` file in the project directory.*
+
 ## API Endpoints
 
 ### `GET /health`

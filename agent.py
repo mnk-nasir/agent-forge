@@ -9,6 +9,9 @@ from google.genai import types
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.memory import MemorySaver # For extreme fallback
+from langgraph.checkpoint.sqlite import SqliteSaver # For local dev
+import sqlite3
 from psycopg_pool import ConnectionPool
 
 # Configure logging
@@ -35,40 +38,70 @@ MODEL_ID = "gemini-2.0-flash" # Updated to a valid model ID for ReAct pattern
 
 def call_model(state: State):
     messages = state["messages"]
-    # Convert LangGraph messages to Google GenAI format if necessary
-    # For simplicity, assuming messages are compatible or handled by SDK wrapper
-    # LangGraph's prebuilt ReAct works well with a model that supports tool calling
+    logger.info(f"Model called with {len(messages)} messages.")
     
-    # Implementation of a simple ReAct step
-    # Note: In a real scenario, you'd use a more robust translation or a LangChain wrapper
-    # But here we follow the google-genai SDK as requested.
-    
-    # This is a simplified ReAct integration
-    response = client.models.generate_content(
-        model=MODEL_ID,
-        contents=messages,
-        config=types.GenerateContentConfig(
-            tools=[types.Tool(function_declarations=[
-                types.FunctionDeclaration(
-                    name="get_weather",
-                    description="Useful for getting weather information.",
-                    parameters=types.Schema(
-                        type="OBJECT",
-                        properties={
-                            "city": types.Schema(type="STRING")
-                        },
-                        required=["city"]
+    # Ensure messages are in the format expected by the SDK
+    formatted_contents = []
+    for msg in messages:
+        if isinstance(msg, types.Content):
+            formatted_contents.append(msg)
+        elif isinstance(msg, dict):
+            # Handle dictionary format
+            role = msg.get("role", "user")
+            parts = []
+            for p in msg.get("parts", []):
+                if isinstance(p, dict) and "text" in p:
+                    parts.append(types.Part(text=p["text"]))
+                elif isinstance(p, str):
+                    parts.append(types.Part(text=p))
+                elif hasattr(p, "text"):
+                    parts.append(types.Part(text=p.text))
+            formatted_contents.append(types.Content(role=role, parts=parts))
+        else:
+            # Fallback for other types
+            logger.warning(f"Unexpected message type: {type(msg)}")
+            formatted_contents.append(types.Content(role="user", parts=[types.Part(text=str(msg))]))
+
+    try:
+        response = client.models.generate_content(
+            model=MODEL_ID,
+            contents=formatted_contents,
+            config=types.GenerateContentConfig(
+                tools=[types.Tool(function_declarations=[
+                    types.FunctionDeclaration(
+                        name="get_weather",
+                        description="Useful for getting weather information.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "city": types.Schema(type="STRING")
+                            },
+                            required=["city"]
+                        )
                     )
-                )
-            ])]
+                ])]
+            )
         )
-    )
-    return {"messages": [response]}
+        
+        # Extract the candidate's message
+        if not response.candidates:
+            logger.error("No candidates returned from model.")
+            raise ValueError("No candidates returned from model.")
+            
+        new_message = response.candidates[0].content
+        logger.info(f"Model responded with: {new_message}")
+        return {"messages": [new_message]}
+    except Exception as e:
+        logger.error(f"Error in call_model: {e}")
+        raise e
 
 def should_continue(state: State):
     last_message = state["messages"][-1]
-    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-        return "tools"
+    # Check if the last message has tool calls
+    if hasattr(last_message, "parts") and last_message.parts:
+        for part in last_message.parts:
+            if hasattr(part, "function_call") and part.function_call:
+                return "tools"
     return END
 
 # Construct the graph
@@ -85,11 +118,20 @@ workflow.add_edge("tools", "agent")
 DB_URI = os.getenv("DATABASE_URL")
 
 def get_agent_app():
-    # In production, use a persistent pool
-    pool = ConnectionPool(conninfo=DB_URI, max_size=20)
-    checkpointer = PostgresSaver(pool)
-    # Ensure tables are created
-    checkpointer.setup()
+    if DB_URI and "postgresql" in DB_URI:
+        try:
+            logger.info(f"Attempting to use PostgresSaver with {DB_URI}")
+            # Use a short timeout for the initial connection check
+            pool = ConnectionPool(conninfo=DB_URI, max_size=20, timeout=5.0)
+            checkpointer = PostgresSaver(pool)
+            checkpointer.setup()
+            return workflow.compile(checkpointer=checkpointer)
+        except Exception as e:
+            logger.warning(f"Failed to connect to Postgres: {e}. Falling back to SQLite.")
+    
+    logger.info("Using SqliteSaver for persistence (Local Development).")
+    conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
+    checkpointer = SqliteSaver(conn)
     return workflow.compile(checkpointer=checkpointer)
 
 # For direct script usage

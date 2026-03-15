@@ -4,4 +4,5 @@ langgraph
 google-genai
 psycopg[binary,pool]
 langgraph-checkpoint-postgres
+langgraph-checkpoint-sqlite
 python-dotenv
